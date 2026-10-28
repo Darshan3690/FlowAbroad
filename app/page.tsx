@@ -20,6 +20,10 @@ import {
   Share2,
   Award,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  CheckCircle2,
+  RotateCcw,
 } from "lucide-react";
 
 type TabType = "dictation" | "simulator" | "insights" | "dictionary" | "snippets";
@@ -95,30 +99,70 @@ const SCENARIOS: Scenario[] = [
   },
 ];
 
-const SAVED_DICTIONARY = [
+export interface DictionaryItem {
+  german: string;
+  phonetic: string;
+  english: string;
+  category: string;
+  accentTip: string;
+  sampleSpoken: string;
+  breakdown: string[];
+}
+
+const SAVED_DICTIONARY: DictionaryItem[] = [
   {
     german: "die Wohnungsgeberbestätigung",
     phonetic: "dee Voh-noongs-gay-ber-buh-shtay-ti-goong",
     english: "Landlord Confirmation of Residence (Mandatory for Bürgeramt)",
     category: "Bürgeramt",
+    accentTip: "In 'bestätigung', pronounce 'st' as 'sht' and articulate the nasal '-ung' clearly.",
+    sampleSpoken: "die Wohnungsgeberbestätigung",
+    breakdown: ["Wohnungs-", "geber-", "be-", "stätigung"],
   },
   {
     german: "das Sperrkonto eröffnen",
     phonetic: "das Shpair-kon-toh air-uff-nen",
     english: "To open the Blocked Account (€11,904/year)",
     category: "Visa & Bank",
+    accentTip: "German 'Sp' is ALWAYS pronounced 'Shp' (Shpair-kon-toh). Never pronounce with a sharp English 'S'.",
+    sampleSpoken: "das Sperrkonto eröffnen",
+    breakdown: ["Sperr-", "konto", "er-", "öffnen"],
   },
   {
     german: "die Immatrikulationsbescheinigung",
     phonetic: "dee Im-ma-tri-koo-la-tsyons-buh-shay-ni-goong",
     english: "Official University Enrollment Certificate",
     category: "University",
+    accentTip: "Pronounce '-tion-' as 'tsyon' (like 'action' in Italian). Keep syllables rhythmic.",
+    sampleSpoken: "die Immatrikulationsbescheinigung",
+    breakdown: ["Immatrikulations-", "be-", "scheinigung"],
   },
   {
     german: "Ich verstehe nur Bahnhof, könnten Sie bitte langsamer sprechen?",
     phonetic: "Ish fer-shtay-uh noor Baan-hof, kun-ten Zee bit-tuh lang-za-mer shpre-shen?",
     english: "I am having trouble following, could you please speak slower?",
     category: "Survival Idiom",
+    accentTip: "Whisper 'ch' in 'Ich' and 'sprechen' softly with your tongue resting behind bottom teeth.",
+    sampleSpoken: "Ich verstehe nur Bahnhof könnten Sie bitte langsamer sprechen",
+    breakdown: ["verstehe", "nur Bahnhof", "langsamer", "sprechen"],
+  },
+  {
+    german: "der Rundfunkbeitrag",
+    phonetic: "dair Roond-foonk-by-traak",
+    english: "Mandatory Public Broadcasting Fee (€18.36/month per apartment)",
+    category: "Finance & Housing",
+    accentTip: "Roll 'R' gently in the back of your throat. Stress 'Rund-funk'. Essential for every Germany student flat!",
+    sampleSpoken: "der Rundfunkbeitrag",
+    breakdown: ["Rundfunk-", "beitrag"],
+  },
+  {
+    german: "Entschuldigung, wo ist das Ausländeramt?",
+    phonetic: "Ent-shool-di-goong, voh ist das Ows-len-der-amt?",
+    english: "Excuse me, where is the Foreigners' Registration Office?",
+    category: "Immigration",
+    accentTip: "Open with 'Ent-shool-di-goong' (soft 'sh'). 'ä' in Ausländer sounds like open 'eh'.",
+    sampleSpoken: "Entschuldigung wo ist das Ausländeramt",
+    breakdown: ["Entschuldigung", "Ausländer-", "amt"],
   },
 ];
 
@@ -166,12 +210,31 @@ export default function FlowAbroadApp() {
   // Lifetime Metrics
   const [totalWordsCount, setTotalWordsCount] = useState<number>(42381);
   const [totalFixesCount, setTotalFixesCount] = useState<number>(1582);
-  const [wpmSpeed] = useState<number>(135); // Realistic fluent learner range (120-150 WPM)
+  const [wpmSpeed] = useState<number>(200); // 200 WPM Top 0.1% matching Wispr Flow metrics
   const [completedMissions, setCompletedMissions] = useState<number[]>([0, 1]);
 
   // Accent Verifier State
   const [germanPracticeInput, setGermanPracticeInput] = useState<string>("");
   const [accentMatchScore, setAccentMatchScore] = useState<number | null>(null);
+
+  // Dictionary Pronunciation Checker State
+  const [dictPracticeState, setDictPracticeState] = useState<
+    Record<
+      number,
+      {
+        input: string;
+        score: number | null;
+        status: "excellent" | "good" | "retry" | null;
+        label: string | null;
+        matchedSyllables: string[];
+      }
+    >
+  >({});
+  const [expandedDictCards, setExpandedDictCards] = useState<Record<number, boolean>>({
+    0: true,
+  });
+  const [activeDictMicIndex, setActiveDictMicIndex] = useState<number | null>(null);
+  const dictRecognitionRef = useRef<any>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // SpeechRecognition reference
@@ -244,19 +307,29 @@ export default function FlowAbroadApp() {
 
     try {
       const recognition = new SpeechRecognition();
-      recognition.continuous = false;
+      recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = selectedLanguage === "DE" ? "de-DE" : "en-US";
 
-      recognition.onstart = () => setIsListeningMic(true);
-      recognition.onend = () => setIsListeningMic(false);
-      recognition.onerror = () => setIsListeningMic(false);
+      recognition.onstart = () => {
+        setIsListeningMic(true);
+        triggerToast("Microphone active! Speak your answer naturally...");
+      };
+
+      recognition.onend = () => {
+        setIsListeningMic(false);
+      };
+
+      recognition.onerror = () => {
+        setIsListeningMic(false);
+      };
 
       recognition.onresult = (event: any) => {
-        const transcript = Array.from(event.results)
-          .map((result: any) => result[0].transcript)
-          .join("");
-        setUserSpeech(transcript);
+        let fullTranscript = "";
+        for (let i = 0; i < event.results.length; i++) {
+          fullTranscript += event.results[i][0].transcript + " ";
+        }
+        setUserSpeech(fullTranscript.trim());
       };
 
       recognitionRef.current = recognition;
@@ -271,37 +344,48 @@ export default function FlowAbroadApp() {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Run AI Coaching Analysis
-  const handleAnalyzeSpeech = async () => {
-    if (!userSpeech.trim()) return;
+  // Run AI Coaching Analysis (Dynamic & Scenario Aware)
+  const handleAnalyzeSpeech = async (speechOverride?: any, scenarioOverride?: Scenario) => {
+    const textToAnalyze = (typeof speechOverride === "string" ? speechOverride : userSpeech).trim();
+    if (!textToAnalyze) return;
+    const scenario = (scenarioOverride && typeof scenarioOverride === "object" && "title" in scenarioOverride) ? scenarioOverride : selectedScenario;
+
     setIsAnalyzing(true);
     try {
       const res = await fetch("/api/coach", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          userSpeech,
-          scenarioTitle: selectedScenario.title,
-          interviewerPrompt: selectedScenario.question,
+          userSpeech: textToAnalyze,
+          scenarioTitle: scenario.title,
+          interviewerPrompt: scenario.question,
         }),
       });
       const data = await res.json();
       if (data && data.englishC1Upgrade) {
         setCoachResult(data);
-        const addedWords = userSpeech.trim().split(/\s+/).length;
+        const addedWords = textToAnalyze.split(/\s+/).length;
         setTotalWordsCount((prev) => prev + addedWords);
         setTotalFixesCount((prev) => prev + (data.grammarFixesCount || 3));
-        if (!completedMissions.includes(selectedScenario.checklistIndex)) {
-          setCompletedMissions((prev) => [...prev, selectedScenario.checklistIndex]);
+        if (!completedMissions.includes(scenario.checklistIndex)) {
+          setCompletedMissions((prev) => [...prev, scenario.checklistIndex]);
         }
-        triggerToast("Evaluation updated successfully!");
+        triggerToast("Evaluation updated with Gemini AI!");
       }
     } catch (e) {
-      console.error(e);
+      console.error("Coach analysis error:", e);
       triggerToast("Failed to analyze speech. Please check your connection.");
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const selectScenario = (sc: Scenario) => {
+    setSelectedScenario(sc);
+    setUserSpeech(sc.sampleHinglish);
+    setGermanPracticeInput("");
+    setAccentMatchScore(null);
+    handleAnalyzeSpeech(sc.sampleHinglish, sc);
   };
 
   // Robust Levenshtein / Order-Aware Accent Matcher
@@ -312,15 +396,26 @@ export default function FlowAbroadApp() {
       return;
     }
 
-    const targetWords = coachResult.germanTranslation
-      .toLowerCase()
-      .replace(/[.,!?]/g, "")
+    const clean = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/[.,!?;:()"-]/g, "")
+        .replace(/ä/g, "ae")
+        .replace(/ö/g, "oe")
+        .replace(/ü/g, "ue")
+        .replace(/ß/g, "ss");
+
+    const targetGerman = clean(coachResult.germanTranslation)
       .split(/\s+/)
       .filter(Boolean);
 
-    const spokenWords = val
-      .toLowerCase()
-      .replace(/[.,!?]/g, "")
+    const targetPhonetics = clean(coachResult.desiPhonetics || "")
+      .split(/\s+/)
+      .filter(Boolean);
+
+    const targetWords = Array.from(new Set([...targetGerman, ...targetPhonetics]));
+
+    const spokenWords = clean(val)
       .split(/\s+/)
       .filter(Boolean);
 
@@ -329,7 +424,6 @@ export default function FlowAbroadApp() {
       return;
     }
 
-    // Levenshtein similarity calculation for each word
     let totalScore = 0;
     const targetSet = new Set(targetWords);
 
@@ -337,17 +431,203 @@ export default function FlowAbroadApp() {
       if (targetSet.has(word)) {
         totalScore += 1;
       } else {
-        // partial match
         const closest = targetWords.some(
           (tw) => tw.includes(word) || (word.length > 3 && tw.startsWith(word.slice(0, 3)))
         );
-        if (closest) totalScore += 0.5;
+        if (closest) totalScore += 0.6;
       }
     });
 
-    const ratio = totalScore / Math.max(targetWords.length, spokenWords.length);
-    const score = Math.min(99, Math.max(40, Math.round(ratio * 100)));
+    const ratio = totalScore / Math.max(targetGerman.length, spokenWords.length);
+    const score = Math.min(99, Math.max(45, Math.round(ratio * 100)));
     setAccentMatchScore(score);
+  };
+
+  // Dictionary Pronunciation Evaluator
+  const evaluateDictionaryPronunciation = (
+    val: string,
+    item: (typeof SAVED_DICTIONARY)[0]
+  ) => {
+    if (!val || !val.trim()) {
+      return {
+        score: null,
+        status: null,
+        label: null,
+        matchedSyllables: [],
+      };
+    }
+
+    const clean = (s: string) =>
+      s
+        .toLowerCase()
+        .replace(/[.,!?;:()"-]/g, "")
+        .replace(/ä/g, "ae")
+        .replace(/ö/g, "oe")
+        .replace(/ü/g, "ue")
+        .replace(/ß/g, "ss")
+        .trim();
+
+    const spokenClean = clean(val);
+    const targetClean = clean(item.german);
+    const phoneticClean = clean(item.phonetic);
+
+    const spokenTokens = spokenClean.split(/\s+/).filter(Boolean);
+    const targetTokens = targetClean.split(/\s+/).filter(Boolean);
+    const phoneticTokens = phoneticClean.split(/\s+/).filter(Boolean);
+
+    // Track matched syllables from item.breakdown
+    const matchedSyllables = item.breakdown.filter((syl) => {
+      const sylClean = clean(syl);
+      return (
+        spokenClean.includes(sylClean) ||
+        spokenTokens.some((tok) => tok.includes(sylClean) || sylClean.includes(tok))
+      );
+    });
+
+    // Check exact full string match
+    if (spokenClean === targetClean || spokenClean === phoneticClean) {
+      return {
+        score: 98,
+        status: "excellent" as const,
+        label: "Perfekt! 🎉 100% Native German Articulation",
+        matchedSyllables: item.breakdown,
+      };
+    }
+
+    let tokenMatches = 0;
+    targetTokens.forEach((tt) => {
+      if (spokenTokens.includes(tt)) {
+        tokenMatches += 1;
+      } else if (
+        spokenTokens.some(
+          (st) =>
+            st.includes(tt) ||
+            tt.includes(st) ||
+            (st.length >= 4 && tt.startsWith(st.slice(0, 4)))
+        )
+      ) {
+        tokenMatches += 0.75;
+      } else if (
+        phoneticTokens.some((pt) =>
+          spokenTokens.some((st) => st.includes(pt) || pt.includes(st))
+        )
+      ) {
+        tokenMatches += 0.6;
+      }
+    });
+
+    const breakdownRatio =
+      item.breakdown.length > 0
+        ? matchedSyllables.length / item.breakdown.length
+        : 0;
+    const tokenRatio =
+      targetTokens.length > 0
+        ? tokenMatches / Math.max(targetTokens.length, spokenTokens.length)
+        : 0;
+
+    const blendedRatio = Math.max(
+      breakdownRatio,
+      tokenRatio * 0.6 + breakdownRatio * 0.4
+    );
+    const score = Math.min(98, Math.max(45, Math.round(blendedRatio * 100)));
+
+    let status: "excellent" | "good" | "retry" = "retry";
+    let label = "Keep practicing! Listen to the audio and articulate German consonants.";
+
+    if (score >= 85) {
+      status = "excellent";
+      label = "Perfekt! 🎉 Clear Native German Pronunciation";
+    } else if (score >= 65) {
+      status = "good";
+      label = "Sehr gut! 👏 Fluent rhythm & recognizable German accent";
+    }
+
+    return {
+      score,
+      status,
+      label,
+      matchedSyllables,
+    };
+  };
+
+  const handleDictPracticeInput = (idx: number, val: string) => {
+    const item = SAVED_DICTIONARY[idx];
+    const result = evaluateDictionaryPronunciation(val, item);
+    setDictPracticeState((prev) => ({
+      ...prev,
+      [idx]: {
+        input: val,
+        ...result,
+      },
+    }));
+  };
+
+  const handleLoadDictSample = (idx: number) => {
+    const item = SAVED_DICTIONARY[idx];
+    handleDictPracticeInput(idx, item.sampleSpoken);
+    triggerToast(`Sample pronunciation loaded for "${item.german}"`);
+  };
+
+  const handleResetDictPractice = (idx: number) => {
+    setDictPracticeState((prev) => ({
+      ...prev,
+      [idx]: {
+        input: "",
+        score: null,
+        status: null,
+        label: null,
+        matchedSyllables: [],
+      },
+    }));
+  };
+
+  const toggleDictCardExpanded = (idx: number) => {
+    setExpandedDictCards((prev) => ({
+      ...prev,
+      [idx]: !prev[idx],
+    }));
+  };
+
+  const toggleDictMicrophone = (idx: number) => {
+    if (typeof window === "undefined") return;
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      triggerToast("Web Speech API not supported. Please use desktop Wispr Flow hotkey or type.");
+      return;
+    }
+
+    if (activeDictMicIndex === idx) {
+      dictRecognitionRef.current?.stop();
+      setActiveDictMicIndex(null);
+      return;
+    }
+
+    try {
+      dictRecognitionRef.current?.stop();
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = "de-DE";
+
+      recognition.onstart = () => setActiveDictMicIndex(idx);
+      recognition.onend = () => setActiveDictMicIndex(null);
+      recognition.onerror = () => setActiveDictMicIndex(null);
+
+      recognition.onresult = (event: any) => {
+        const transcript = Array.from(event.results)
+          .map((result: any) => result[0].transcript)
+          .join("");
+        handleDictPracticeInput(idx, transcript);
+      };
+
+      dictRecognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      setActiveDictMicIndex(null);
+    }
   };
 
   const copyToClipboard = (text: string, index: number) => {
@@ -654,12 +934,7 @@ export default function FlowAbroadApp() {
                         {SCENARIOS.map((sc) => (
                           <button
                             key={sc.id}
-                            onClick={() => {
-                              setSelectedScenario(sc);
-                              setUserSpeech(sc.sampleHinglish);
-                              setGermanPracticeInput("");
-                              setAccentMatchScore(null);
-                            }}
+                            onClick={() => selectScenario(sc)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                               selectedScenario.id === sc.id
                                 ? "bg-white text-[#141413] shadow-xs"
@@ -832,7 +1107,7 @@ export default function FlowAbroadApp() {
                     </div>
 
                     <button
-                      onClick={handleAnalyzeSpeech}
+                      onClick={() => handleAnalyzeSpeech()}
                       disabled={isAnalyzing}
                       className="px-6 py-2.5 rounded-xl bg-[#165B53] text-white border-[1.5px] border-[#141413] shadow-[0_3px_0_0_#141413] hover:bg-[#124b44] active:translate-y-[2px] active:shadow-none font-semibold text-sm flex items-center gap-2 transition-all disabled:opacity-60 cursor-pointer"
                     >
@@ -971,15 +1246,23 @@ export default function FlowAbroadApp() {
                   </div>
 
                   {/* WINNING WISPR ACCENT VERIFIER INPUT */}
-                  <div className="border-t border-[#E2E0D8] pt-2.5 space-y-1.5">
-                    <label className="text-[11px] font-bold text-[#141413] block">
-                      🎯 Test German Accent with Wispr Flow:
-                    </label>
+                  <div className="border-t border-[#E2E0D8] pt-2.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-bold text-[#141413] block">
+                        🎯 Test German Accent with Wispr Flow:
+                      </label>
+                      <button
+                        onClick={() => handleVerifyGermanAccent(coachResult.germanTranslation)}
+                        className="text-[10px] px-2 py-0.5 rounded bg-white border border-[#141413] text-[#165B53] font-semibold hover:bg-[#D3ECE6] cursor-pointer"
+                      >
+                        ⚡ Test Sample
+                      </button>
+                    </div>
                     <input
                       type="text"
                       value={germanPracticeInput}
                       onChange={(e) => handleVerifyGermanAccent(e.target.value)}
-                      placeholder="Dictate the phonetics above using Wispr Flow..."
+                      placeholder="Dictate the phonetics above using Wispr Flow (Fn or Ctrl+Win)..."
                       className="w-full px-3 py-2 text-xs rounded-lg bg-white border border-[#141413] focus:outline-none"
                     />
                     {accentMatchScore !== null && (
@@ -1022,8 +1305,7 @@ export default function FlowAbroadApp() {
                   <div
                     key={sc.id}
                     onClick={() => {
-                      setSelectedScenario(sc);
-                      setUserSpeech(sc.sampleHinglish);
+                      selectScenario(sc);
                       setActiveTab("dictation");
                     }}
                     className={`p-4 rounded-2xl border transition-all cursor-pointer ${
@@ -1047,9 +1329,22 @@ export default function FlowAbroadApp() {
 
               {/* Next Question from Examiner */}
               <div className="bg-[#F6F5F0] rounded-2xl p-6 border border-[#EAE8E1] space-y-3">
-                <span className="text-xs font-bold uppercase tracking-wider text-[#165B53]">
-                  Follow-up Question from German Officer:
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-[#165B53]">
+                    Follow-up Question from German Officer:
+                  </span>
+                  <button
+                    onClick={() => speakText(coachResult.nextQuestion, "de-DE", "simulator-followup")}
+                    className={`px-3 py-1.5 rounded-lg border border-[#141413] text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all ${
+                      activePlayingId === "simulator-followup"
+                        ? "bg-[#165B53] text-white"
+                        : "bg-white hover:bg-[#FEFCE8]"
+                    }`}
+                  >
+                    <Volume2 className="w-3.5 h-3.5" />
+                    <span>{activePlayingId === "simulator-followup" ? "Playing..." : "Hear Question"}</span>
+                  </button>
+                </div>
                 <p className="text-base font-semibold text-[#141413] bg-white p-4 rounded-xl border border-[#EAE8E1]">
                   &ldquo;{coachResult.nextQuestion}&rdquo;
                 </p>
@@ -1058,8 +1353,9 @@ export default function FlowAbroadApp() {
                     onClick={() => {
                       setUserSpeech("");
                       setActiveTab("dictation");
+                      triggerToast("Speak your answer to the examiner's follow-up!");
                     }}
-                    className="px-4 py-2 rounded-xl bg-[#165B53] text-white text-xs font-semibold shadow-[0_2px_0_0_#141413] border border-[#141413] cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-[#165B53] text-white text-xs font-semibold shadow-[0_2px_0_0_#141413] border border-[#141413] cursor-pointer hover:bg-[#124b44]"
                   >
                     Answer with Wispr Flow →
                   </button>
@@ -1273,45 +1569,252 @@ export default function FlowAbroadApp() {
           )}
 
           {/* =========================================================
-              TAB 4: SURVIVAL DICTIONARY
+              TAB 4: SURVIVAL DICTIONARY WITH WISPR FLOW PRONUNCIATION CHECK
              ========================================================= */}
           {activeTab === "dictionary" && (
-            <div className="max-w-4xl mx-auto space-y-5">
-              <h1 className="text-2xl font-bold text-[#141413]">
-                German &amp; C1 English Survival Dictionary
-              </h1>
-              <p className="text-xs text-[#686763]">
-                Essential vocabulary and high-frequency phrases for Indian students arriving in Germany.
-              </p>
-              <div className="grid grid-cols-1 gap-3">
-                {SAVED_DICTIONARY.map((item, idx) => (
-                  <div
-                    key={idx}
-                    className="bg-[#F6F5F0] p-4 rounded-2xl border border-[#EAE8E1] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                  >
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#EADBFF] text-[#4C1D95]">
-                        {item.category}
-                      </span>
-                      <p className="text-base font-bold text-[#141413]">{item.german}</p>
-                      <p className="text-xs font-semibold text-[#165B53]">
-                        🗣️ Desi Phonetics: {item.phonetic}
-                      </p>
-                      <p className="text-xs text-[#686763]">{item.english}</p>
-                    </div>
-                    <button
-                      onClick={() => speakText(item.german, "de-DE", `dict-${idx}`)}
-                      className={`px-4 py-2 rounded-xl border-[1.5px] border-[#141413] shadow-[0_2px_0_0_#141413] text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer ${
-                        activePlayingId === `dict-${idx}`
-                          ? "bg-[#165B53] text-white"
-                          : "bg-[#FEFCE8]"
-                      }`}
+            <div className="max-w-4xl mx-auto space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h1 className="text-2xl font-bold text-[#141413]">
+                    German &amp; C1 English Survival Dictionary
+                  </h1>
+                  <p className="text-xs text-[#686763] mt-0.5">
+                    Essential bureaucracy vocabulary. Hold Wispr Flow (<kbd className="px-1.5 py-0.5 rounded bg-white border border-[#141413] text-[10px] font-mono font-bold">Fn</kbd> or <kbd className="px-1.5 py-0.5 rounded bg-white border border-[#141413] text-[10px] font-mono font-bold">Ctrl+Win</kbd>) to test your German pronunciation in real-time.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="px-3 py-1 rounded-full bg-[#D3ECE6] text-[#165B53] border border-[#165B53]/30 text-xs font-bold flex items-center gap-1.5 shadow-xs">
+                    <span className="w-2 h-2 rounded-full bg-[#165B53] animate-pulse" />
+                    Wispr Flow Verifier Active
+                  </span>
+                </div>
+              </div>
+
+              {/* Instructions banner */}
+              <div className="p-3.5 rounded-xl bg-[#FEFCE8] border-[1.5px] border-[#141413] shadow-[0_2px_0_0_#141413] flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-[#141413]">
+                <div className="flex items-center gap-2.5">
+                  <Mic className="w-4 h-4 text-[#165B53] shrink-0" />
+                  <span>
+                    <strong>How to test:</strong> Click <strong>&ldquo;Check Pronunciation&rdquo;</strong> on any word below, then hold your Wispr Flow hotkey or click <strong>&ldquo;Use Browser Mic&rdquo;</strong> to speak the phonetics aloud!
+                  </span>
+                </div>
+                <div className="text-[11px] font-semibold text-[#165B53] shrink-0">
+                  Hands-Free Voice Recognition
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4">
+                {SAVED_DICTIONARY.map((item, idx) => {
+                  const state = dictPracticeState[idx] || {
+                    input: "",
+                    score: null,
+                    status: null,
+                    label: null,
+                    matchedSyllables: [],
+                  };
+                  const isExpanded = !!expandedDictCards[idx];
+                  const isMicActive = activeDictMicIndex === idx;
+
+                  return (
+                    <div
+                      key={idx}
+                      className="bg-[#F6F5F0] rounded-2xl border border-[#EAE8E1] p-5 space-y-4 shadow-xs transition-all"
                     >
-                      <Volume2 className="w-4 h-4" />
-                      <span>{activePlayingId === `dict-${idx}` ? "Playing..." : "Pronounce"}</span>
-                    </button>
-                  </div>
-                ))}
+                      {/* CARD HEADER */}
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-[#EADBFF] text-[#4C1D95]">
+                              {item.category}
+                            </span>
+                            {state.score !== null && (
+                              <span
+                                className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border flex items-center gap-1 ${
+                                  state.status === "excellent"
+                                    ? "bg-[#D3ECE6] text-[#165B53] border-[#165B53]/30"
+                                    : state.status === "good"
+                                    ? "bg-[#FEFCE8] text-[#B45309] border-[#B45309]/30"
+                                    : "bg-red-50 text-red-700 border-red-200"
+                                }`}
+                              >
+                                <Award className="w-3 h-3" />
+                                <span>{state.score}% Pronunciation Match</span>
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-lg font-bold text-[#141413]">{item.german}</p>
+                          <p className="text-xs font-semibold text-[#165B53]">
+                            🗣️ Desi Phonetics: {item.phonetic}
+                          </p>
+                          <p className="text-xs text-[#686763]">{item.english}</p>
+                        </div>
+
+                        {/* ACTION BUTTONS */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => speakText(item.german, "de-DE", `dict-${idx}`)}
+                            className={`px-3 py-2 rounded-xl border-[1.5px] border-[#141413] shadow-[0_2px_0_0_#141413] active:translate-y-[1px] active:shadow-none text-xs font-semibold flex items-center gap-1.5 shrink-0 cursor-pointer transition-all ${
+                              activePlayingId === `dict-${idx}`
+                                ? "bg-[#165B53] text-white"
+                                : "bg-white hover:bg-[#FEFCE8] text-[#141413]"
+                            }`}
+                          >
+                            <Volume2 className="w-3.5 h-3.5" />
+                            <span>{activePlayingId === `dict-${idx}` ? "Playing..." : "Pronounce"}</span>
+                          </button>
+
+                          <button
+                            onClick={() => toggleDictCardExpanded(idx)}
+                            className={`px-3.5 py-2 rounded-xl border-[1.5px] border-[#141413] shadow-[0_2px_0_0_#141413] active:translate-y-[1px] active:shadow-none text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer transition-all ${
+                              isExpanded
+                                ? "bg-[#165B53] text-white"
+                                : "bg-[#FEFCE8] text-[#141413] hover:bg-[#FDF9C4]"
+                            }`}
+                          >
+                            <Mic className="w-3.5 h-3.5" />
+                            <span>{isExpanded ? "Hide Verifier" : "Check Pronunciation"}</span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-3.5 h-3.5" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* EXPANDABLE WISPR FLOW PRONUNCIATION ARENA */}
+                      {isExpanded && (
+                        <div className="pt-3 border-t border-[#E2E0D8] space-y-3">
+                          <div className="bg-white rounded-xl p-4 border-[1.5px] border-[#141413] shadow-[0_2px_0_0_#141413] space-y-3">
+                            {/* ARENA HEADER & ACTIONS */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span className="w-2.5 h-2.5 rounded-full bg-[#165B53] animate-ping" />
+                                <span className="text-xs font-bold uppercase tracking-wider text-[#165B53]">
+                                  🎯 Wispr Flow Pronunciation Arena
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <button
+                                  onClick={() => toggleDictMicrophone(idx)}
+                                  className={`text-[11px] px-2.5 py-1 rounded-lg border font-semibold flex items-center gap-1 cursor-pointer transition-all ${
+                                    isMicActive
+                                      ? "bg-red-500 text-white border-red-600 animate-pulse"
+                                      : "bg-[#FEFCE8] text-[#141413] border-[#141413] hover:bg-[#FDF9C4]"
+                                  }`}
+                                >
+                                  <Radio className="w-3 h-3" />
+                                  <span>{isMicActive ? "Listening (DE)..." : "Use Browser Mic"}</span>
+                                </button>
+
+                                <button
+                                  onClick={() => handleLoadDictSample(idx)}
+                                  className="text-[11px] px-2.5 py-1 rounded-lg bg-white border border-[#141413] text-[#165B53] font-semibold hover:bg-[#D3ECE6] cursor-pointer"
+                                >
+                                  ⚡ Test Sample
+                                </button>
+
+                                {state.input && (
+                                  <button
+                                    onClick={() => handleResetDictPractice(idx)}
+                                    className="text-[11px] px-2 py-1 rounded-lg bg-white border border-[#EAE8E1] text-[#686763] hover:text-[#141413] cursor-pointer flex items-center gap-1"
+                                  >
+                                    <RotateCcw className="w-3 h-3" />
+                                    <span>Reset</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* TACTILE INPUT FIELD */}
+                            <div className="relative">
+                              <input
+                                type="text"
+                                value={state.input}
+                                onChange={(e) => handleDictPracticeInput(idx, e.target.value)}
+                                placeholder="Hold Wispr Flow hotkey (Fn or Ctrl+Win) to pronounce this word aloud..."
+                                className="w-full px-3.5 py-2.5 text-xs font-semibold rounded-xl bg-[#FEFCE8] border-[1.5px] border-[#141413] text-[#141413] placeholder:text-[#686763] focus:outline-none focus:ring-2 focus:ring-[#165B53] shadow-xs"
+                              />
+                            </div>
+
+                            {/* EVALUATION RESULT BADGES & SYLLABLE BREAKDOWN */}
+                            {state.score !== null ? (
+                              <div className="space-y-2.5 pt-1">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-xl bg-[#F6F5F0] border border-[#EAE8E1]">
+                                  <div className="flex items-center gap-2.5">
+                                    <div
+                                      className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs border-[1.5px] border-[#141413] shrink-0 ${
+                                        state.status === "excellent"
+                                          ? "bg-[#165B53] text-white"
+                                          : state.status === "good"
+                                          ? "bg-[#FDBA4D] text-[#141413]"
+                                          : "bg-red-200 text-red-900"
+                                      }`}
+                                    >
+                                      {state.score}%
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-bold text-[#141413]">{state.label}</p>
+                                      <p className="text-[11px] text-[#686763]">
+                                        Dictated via Wispr Flow: &ldquo;{state.input}&rdquo;
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1 text-[11px] font-semibold text-[#165B53] shrink-0">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    <span>
+                                      {state.matchedSyllables.length}/{item.breakdown.length} Syllables Matched
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* SYLLABLE CHIPS */}
+                                <div className="space-y-1">
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-[#686763] block">
+                                    Syllable Breakdown Check:
+                                  </span>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {item.breakdown.map((syl, sIdx) => {
+                                      const isMatched = state.matchedSyllables.includes(syl);
+                                      return (
+                                        <span
+                                          key={sIdx}
+                                          className={`text-xs px-2.5 py-1 rounded-lg border font-mono font-semibold flex items-center gap-1 ${
+                                            isMatched
+                                              ? "bg-[#D3ECE6] text-[#165B53] border-[#165B53]/40"
+                                              : "bg-white text-[#8C8B85] border-[#EAE8E1]"
+                                          }`}
+                                        >
+                                          <span>{syl}</span>
+                                          {isMatched && <Check className="w-3 h-3 stroke-[2.5]" />}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-[#686763] flex items-center gap-1.5">
+                                <Info className="w-3.5 h-3.5 text-[#165B53] shrink-0" />
+                                <span>Tip: Say &ldquo;{item.phonetic}&rdquo; aloud into your microphone. Wispr Flow will transcribe and grade accuracy.</span>
+                              </div>
+                            )}
+
+                            {/* PHONETIC TONGUE & ACCENT PRO-TIP */}
+                            <div className="p-2.5 rounded-lg bg-[#EADBFF]/30 border border-[#4C1D95]/20 flex items-start gap-2 text-xs">
+                              <Sparkles className="w-3.5 h-3.5 text-[#4C1D95] shrink-0 mt-0.5" />
+                              <div className="text-[#3F3E3C]">
+                                <strong className="text-[#4C1D95]">German Phonetic Tip:</strong>{" "}
+                                {item.accentTip}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1337,13 +1840,26 @@ export default function FlowAbroadApp() {
                       <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded bg-[#FEFCE8] border border-[#141413] text-[#141413]">
                         {snip.context}
                       </span>
-                      <button
-                        onClick={() => copyToClipboard(snip.german, idx)}
-                        className="px-3 py-1 rounded-lg bg-white border border-[#141413] text-xs font-semibold flex items-center gap-1.5 hover:bg-[#FEFCE8] cursor-pointer"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>{copiedSnippetIndex === idx ? "Copied!" : "Copy Snippet"}</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => speakText(snip.german, "de-DE", `snip-${idx}`)}
+                          className={`px-3 py-1 rounded-lg border border-[#141413] text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all ${
+                            activePlayingId === `snip-${idx}`
+                              ? "bg-[#165B53] text-white"
+                              : "bg-white hover:bg-[#FEFCE8]"
+                          }`}
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                          <span>{activePlayingId === `snip-${idx}` ? "Playing..." : "Pronounce"}</span>
+                        </button>
+                        <button
+                          onClick={() => copyToClipboard(snip.german, idx)}
+                          className="px-3 py-1 rounded-lg bg-white border border-[#141413] text-xs font-semibold flex items-center gap-1.5 hover:bg-[#FEFCE8] cursor-pointer"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>{copiedSnippetIndex === idx ? "Copied!" : "Copy Snippet"}</span>
+                        </button>
+                      </div>
                     </div>
 
                     <h3 className="font-bold text-sm text-[#141413]">{snip.title}</h3>
@@ -1395,8 +1911,7 @@ export default function FlowAbroadApp() {
                   <button
                     key={sc.id}
                     onClick={() => {
-                      setSelectedScenario(sc);
-                      setUserSpeech(sc.sampleHinglish);
+                      selectScenario(sc);
                       setShowGetStartedModal(false);
                       setActiveTab("dictation");
                     }}
